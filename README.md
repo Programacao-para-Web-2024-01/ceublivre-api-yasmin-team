@@ -4,61 +4,61 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-
-	"github.com/gin-gonic/gin"
 )
 
 type Request struct {
-	ID       string `json:"id"`
-	Message  string `json:"message"`
-	Severity string `json:"severity"`
+	ID      int    `json:"id"`
+	Message string `json:"message"`
 }
 
 var requests []Request
+var lastID int
 
 func main() {
-	r := gin.Default()
+	r := http.NewServeMux()
 
-
-	r.POST("/support/request", func(c *gin.Context) {
-		var req Request
-		if err := c.BindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	r.HandleFunc("/support/request", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		req.ID = fmt.Sprintf("REQ%d", len(requests)+1)
-		requests = append(requests, req)
-		c.JSON(http.StatusOK, req)
-	})
 
-	
-	r.POST("/support/request/:id/photo", func(c *gin.Context) {
-		id := c.Param("id")
-		// Lógica para receber e salvar a foto
-		c.JSON(http.StatusOK, gin.H{"message": "Photo uploaded successfully"})
-	})
-
-
-	r.PUT("/support/request/:id/classify", func(c *gin.Context) {
-		id := c.Param("id")
-		severity := c.Query("severity")
-		// Lógica para classificar a solicitação com base na gravidade
-		for i, req := range requests {
-			if req.ID == id {
-				requests[i].Severity = severity
-				break
-			}
+		var req Request
+		if _, err := fmt.Fscanf(r.Body, "%s", &req.Message); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
 		}
-		c.JSON(http.StatusOK, gin.H{"message": "Request classified successfully"})
+
+		lastID++
+		req.ID = lastID
+		requests = append(requests, req)
+
+		w.WriteHeader(http.StatusOK)
 	})
 
+	r.HandleFunc("/support/request/photo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 
-	r.GET("/support/requests", func(c *gin.Context) {
-		c.JSON(http.StatusOK, requests)
+		
+
+		w.WriteHeader(http.StatusOK)
 	})
 
-	if err := r.Run(":8080"); err != nil {
-		log.Fatal(err)
-	}
+	r.HandleFunc("/support/requests", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		for _, req := range requests {
+			fmt.Fprintf(w, "ID: %d, Message: %s\n", req.ID, req.Message)
+		}
+	})
+
+	log.Fatal(http.ListenAndServe(":8080", r))
 }
+
 
