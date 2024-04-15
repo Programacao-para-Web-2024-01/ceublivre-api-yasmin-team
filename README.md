@@ -1,12 +1,16 @@
 1 PARTE:
 SOLICITAÇÃO.
 
+
+
 package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -57,6 +61,33 @@ func main() {
 		fmt.Fprintf(w, "Request ID %d registered\n", req.ID)
 		w.WriteHeader(http.StatusOK)
 	})
+	r.HandleFunc("/support/request/photo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		r.ParseMultipartForm(10 << 20) // Limit to 10MB files
+		file, handler, err := r.FormFile("photo")
+		if err != nil {
+			fmt.Println("Error Retrieving the File")
+			fmt.Println(err)
+			return
+		}
+		defer file.Close()
+		fmt.Printf("Uploaded File: %+v\n", handler.Filename)
+		fmt.Printf("File Size: %+v\n", handler.Size)
+		fmt.Printf("MIME Header: %+v\n", handler.Header)
+
+		f, err := os.OpenFile("./uploads/"+handler.Filename, os.O_WRONLY|os.O_CREATE, 0666)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		defer f.Close()
+		io.Copy(f, file)
+		fmt.Fprintf(w, "File uploaded successfully")
+		w.WriteHeader(http.StatusOK)
+	})
 	r.HandleFunc("/support/requests", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -68,4 +99,5 @@ func main() {
 	})
 	log.Fatal(http.ListenAndServe(":8080", r))
 }
+
 
