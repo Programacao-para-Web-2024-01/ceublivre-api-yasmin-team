@@ -3,130 +3,138 @@ SOLICITAÇÃO.
 
 
 
-  package main
+package main
 
 import (
-	"context"
-	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"os"
-	"os/signal"
-	"strings"
-	"syscall"
+    "context"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "os/signal"
+    "strings"
+    "sync"
+    "syscall"
+    "time"
 )
 
+
 type Request struct {
-	ID      int    `json:"id"`
-	Message string `json:"message"`
-	Nature  string `json:"nature"`
-	Gravity string `json:"gravity"`
+    ID      int    `json:"id"`
+    Message string `json:"message"`
+    Nature  string `json:"nature"`
+    Gravity string `json:"gravity"`
 }
 
 var (
-	requests []Request
-	lastID   int
-	shutdown = make(chan os.Signal, 1)
+    requests    []Request           // Lista de solicitações de suporte
+    lastID      int                 // Último ID utilizado
+    requestsMux sync.RWMutex        // Mutex para garantir segurança da lista de solicitações
+    shutdown    = make(chan os.Signal, 1)
 )
 
+
 func classifyRequest(message string) (string, string) {
-	var nature, gravity string
-	if strings.Contains(message, "erro") || strings.Contains(message, "falha") {
-		nature = "Técnica"
-	} else if strings.Contains(message, "reembolso") || strings.Contains(message, "pagamento") {
-		nature = "Financeira"
-	} else {
-		nature = "Geral"
-	}
-	if strings.Contains(message, "urgente") || strings.Contains(message, "imediato") {
-		gravity = "Alta"
-	} else {
-		gravity = "Normal"
-	}
-	return nature, gravity
+    var nature, gravity string
+
+    // Classificação da natureza da solicitação
+    if strings.Contains(message, "erro") || strings.Contains(message, "falha") {
+        nature = "Técnica"
+    } else if strings.Contains(message, "reembolso") || strings.Contains(message, "pagamento") {
+        nature = "Financeira"
+    } else {
+        nature = "Geral"
+    }
+
+    
+    if strings.Contains(message, "urgente") || strings.Contains(message, "imediato") {
+        gravity = "Alta"
+    } else {
+        gravity = "Normal"
+    }
+
+    return nature, gravity
+}
+
+
+func saveRequest(req Request) {
+    requestsMux.Lock()
+    defer requestsMux.Unlock()
+
+    lastID++
+    req.ID = lastID
+    requests = append(requests, req)
+}
+
+
+func getRequests() []Request {
+    requestsMux.RLock()
+    defer requestsMux.RUnlock()
+
+    return requests
 }
 
 func main() {
-	r := http.NewServeMux()
+    r := http.NewServeMux()
 
-	r.HandleFunc("/support/request", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		var req Request
-		if err := r.ParseForm(); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		req.Message = r.FormValue("message")
-		req.Nature, req.Gravity = classifyRequest(req.Message)
-		lastID++
-		req.ID = lastID
-		requests = append(requests, req)
-		fmt.Fprintf(w, "Request ID %d registered\n", req.ID)
-		w.WriteHeader(http.StatusOK)
-	})
+    r.HandleFunc("/support/request", func(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodPost {
+            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
 
-	r.HandleFunc("/support/request/photo", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		r.ParseMultipartForm(10 << 20) // Limit to 10MB files
-		file, handler, err := r.FormFile("photo")
-		if err != nil {
-			fmt.Println("Error Retrieving the File")
-			fmt.Println(err)
-			return
-		}
-		defer file.Close()
-		fmt.Printf("Uploaded File: %+v\n", handler.Filename)
-		fmt.Printf("File Size: %+v\n", handler.Size)
-		fmt.Printf("MIME Header: %+v\n", handler.Header)
+        var req Request
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+            http.Error(w, "Bad request", http.StatusBadRequest)
+            return
+        }
 
-		f, err := os.OpenFile("./uploads/"+handler.Filename, os.O_WRONLY|os.O_CREATE, 0666)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		defer f.Close()
-		io.Copy(f, file)
-		fmt.Fprintf(w, "File uploaded successfully")
-		w.WriteHeader(http.StatusOK)
-	})
+        req.Nature, req.Gravity = classifyRequest(req.Message)
+        saveRequest(req)
 
-	r.HandleFunc("/support/requests", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		for _, req := range requests {
-			fmt.Fprintf(w, "ID: %d, Message: %s, Nature: %s, Gravity: %s\n", req.ID, req.Message, req.Nature, req.Gravity)
-		}
-	})
+        fmt.Fprintf(w, "Request ID %d registered\n", req.ID)
+    })
 
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+    r.HandleFunc("/support/requests", func(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodGet {
+            http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
 
-	server := &http.Server{
-		Addr:    ":8080",
-		Handler: r,
-	}
+        requestList := getRequests()
 
-	go func() {
-		<-shutdown
-		log.Println("Shutting down the server...")
-		if err := server.Shutdown(context.Background()); err != nil {
-			log.Fatalf("Error shutting down server: %v", err)
-		}
-	}()
+        w.Header().Set("Content-Type", "application/json")
+        if err := json.NewEncoder(w).Encode(requestList); err != nil {
+            http.Error(w, "Internal server error", http.StatusInternalServerError)
+            log.Printf("Error encoding response: %v\n", err)
+            return
+        }
+    })
 
-	log.Println("Server started, press Ctrl+C to shutdown")
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Error starting server: %v", err)
-	}
+    signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+
+    server := &http.Server{
+        Addr:    ":8081",
+        Handler: r,
+    }
+
+    go func() {
+        <-shutdown
+        log.Println("Shutting down the server...")
+        ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+        defer cancel()
+        if err := server.Shutdown(ctx); err != nil {
+            log.Fatalf("Error shutting down server: %v", err)
+        }
+    }()
+
+    log.Println("Server started, press Ctrl+C to shutdown")
+    if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+        log.Fatalf("Error starting server: %v", err)
+    }
 }
+
 
 
 
