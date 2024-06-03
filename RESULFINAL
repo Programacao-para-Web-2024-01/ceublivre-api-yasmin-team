@@ -1,0 +1,386 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/smtp"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+type Request struct {
+	ID           int      `json:"id"`
+	Message      string   `json:"message,omitempty"`
+	Nature       string   `json:"nature,omitempty"`
+	Gravity      string   `json:"gravity,omitempty"`
+	AdminComment string   `json:"admin_comment,omitempty"`
+	VendorID     int      `json:"vendor_id,omitempty"`
+	Photos       []string `json:"photos,omitempty"`
+}
+
+type Nature struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+var (
+	requests    []Request
+	requestsMux sync.RWMutex
+	lastID      int
+	natures     []Nature
+	naturesMux  sync.RWMutex
+	natureID    int
+	shutdown    = make(chan os.Signal, 1)
+)
+
+func classifyRequest(message string) (string, string) {
+	var nature, gravity string
+
+	// Classificação da natureza da solicitação
+	if strings.Contains(message, "erro") || strings.Contains(message, "falha") {
+		nature = "Técnica"
+	} else if strings.Contains(message, "reembolso") || strings.Contains(message, "pagamento") {
+		nature = "Financeira"
+	} else {
+		nature = "Geral"
+	}
+
+	if strings.Contains(message, "urgente") || strings.Contains(message, "imediato") {
+		gravity = "Alta"
+	} else {
+		gravity = "Normal"
+	}
+
+	return nature, gravity
+}
+
+func saveRequest(req Request) {
+	requestsMux.Lock()
+	defer requestsMux.Unlock()
+
+	lastID++
+	req.ID = lastID
+	requests = append(requests, req)
+
+	// Envie um e-mail de notificação
+	go sendEmailNotification(req)
+}
+
+func getRequests() []Request {
+	requestsMux.RLock()
+	defer requestsMux.RUnlock()
+
+	return requests
+}
+
+func createNature(name string) {
+	naturesMux.Lock()
+	defer naturesMux.Unlock()
+
+	natureID++
+	n := Nature{
+		ID:   natureID,
+		Name: name,
+	}
+	natures = append(natures, n)
+}
+
+func listNatures() []Nature {
+	naturesMux.RLock()
+	defer naturesMux.RUnlock()
+
+	return natures
+}
+
+func deleteNature(id int) {
+	naturesMux.Lock()
+	defer naturesMux.Unlock()
+
+	for i, n := range natures {
+		if n.ID == id {
+			natures = append(natures[:i], natures[i+1:]...)
+			return
+		}
+	}
+}
+
+func sendEmailNotification(req Request) {
+	// Configurações de envio de e-mail (substitua com suas próprias configurações)
+	smtpHost := "smtp.example.com"
+	smtpPort := 587
+	smtpUsername := "your_username"
+	smtpPassword := "your_password"
+	emailFrom := "your_email@example.com"
+	recipientEmail := "recipient@example.com"
+
+	// Construa a mensagem de e-mail
+	message := []byte(fmt.Sprintf("From: %s\r\n", emailFrom) +
+		fmt.Sprintf("To: %s\r\n", recipientEmail) +
+		"Subject: Atualização de status da solicitação\r\n" +
+		"\r\n" +
+		fmt.Sprintf("A solicitação ID %d foi atualizada. Status: %s", req.ID, req.AdminComment))
+
+	// Autenticação de SMTP
+	auth := smtp.PlainAuth("", smtpUsername, smtpPassword, smtpHost)
+
+	// Envie o e-mail usando SMTP
+	err := smtp.SendMail(smtpHost+":"+strconv.Itoa(smtpPort), auth, emailFrom, []string{recipientEmail}, message)
+	if err != nil {
+		log.Printf("Erro ao enviar e-mail de notificação: %v\n", err)
+	}
+}
+
+func handleFileUpload(r *http.Request) ([]string, error) {
+	r.ParseMultipartForm(10 << 20) // limite de tamanho de arquivo de 10 MB
+
+	files := r.MultipartForm.File["photos"]
+	var fileNames []string
+
+	for _, file := range files {
+		src, err := file.Open()
+		if err != nil {
+			return nil, err
+		}
+		defer src.Close()
+
+		fileName := filepath.Base(file.Filename)
+		dst, err := os.Create("./uploads/" + fileName)
+		if err != nil {
+			return nil, err
+		}
+		defer dst.Close()
+
+		if _, err := io.Copy(dst, src); err != nil {
+			return nil, err
+		}
+
+		fileNames = append(fileNames, fileName)
+	}
+
+	return fileNames, nil
+}
+
+func main() {
+	r := http.NewServeMux()
+
+	// Manipulador de solicitação para "/support/request"
+	r.HandleFunc("/support/request", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Ler os dados do formulário, incluindo possíveis arquivos enviados
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, "Failed to parse form", http.StatusBadRequest)
+			return
+		}
+
+		message := r.FormValue("message")
+
+		// Lidar com o upload de arquivos (fotos)
+		photos, err := handleFileUpload(r)
+		if err != nil {
+			http.Error(w, "Failed to upload photos", http.StatusInternalServerError)
+			return
+		}
+
+		var req Request
+		req.Message = message
+		req.Photos = photos
+
+		// Classificar a solicitação com base na mensagem
+		req.Nature, req.Gravity = classifyRequest(req.Message)
+		saveRequest(req)
+
+		fmt.Fprintf(w, "Request ID %d registered\n", req.ID)
+	})
+
+	// Manipulador de solicitação para "/support/requests"
+	r.HandleFunc("/support/requests", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		requestList := getRequests()
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(requestList); err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			log.Printf("Error encoding response: %v\n", err)
+			return
+		}
+	})
+
+	// Manipulador de solicitação para "/support/natures"
+	r.HandleFunc("/support/natures", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			var n Nature
+			if err := json.NewDecoder(r.Body).Decode(&n); err != nil {
+				http.Error(w, "Bad request", http.StatusBadRequest)
+				return
+			}
+			createNature(n.Name)
+			fmt.Fprintf(w, "Nature %s created\n", n.Name)
+		case http.MethodGet:
+			natureList := listNatures()
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(natureList); err != nil {
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				log.Printf("Error encoding response: %v\n", err)
+				return
+			}
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// Manipulador de solicitação para "/support/natures/{id}"
+	r.HandleFunc("/support/natures/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		parts := strings.Split(r.URL.Path, "/")
+		if len(parts) != 4 {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		natureID, err := strconv.Atoi(parts[3])
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		deleteNature(natureID)
+		fmt.Fprintf(w, "Nature with ID %d deleted\n", natureID)
+	})
+
+	// Manipulador de rota para responder a uma solicitação específica
+	r.HandleFunc("/support/request/{id}/respond", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		parts := strings.Split(r.URL.Path, "/")
+		if len(parts) != 5 {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		requestID, err := strconv.Atoi(parts[3])
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		var adminResponse struct {
+			Comment  string `json:"comment"`
+			VendorID int    `json:"vendor_id,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&adminResponse); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		// Encontre a solicitação correspondente
+		requestsMux.Lock()
+		defer requestsMux.Unlock()
+
+		for i, req := range requests {
+			if req.ID == requestID {
+				requests[i].AdminComment = adminResponse.Comment
+				requests[i].VendorID = adminResponse.VendorID
+				fmt.Fprintf(w, "Admin response added to request %d\n", requestID)
+
+				// Envie uma notificação por e-mail
+				go sendEmailNotification(requests[i])
+				return
+			}
+		}
+
+		http.Error(w, "Request not found", http.StatusNotFound)
+	})
+
+	// Manipulador de rota para encaminhar uma solicitação para um vendedor específico
+	r.HandleFunc("/support/request/{id}/forward", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		parts := strings.Split(r.URL.Path, "/")
+		if len(parts) != 5 {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		requestID, err := strconv.Atoi(parts[3])
+		if err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		var forwardRequest struct {
+			VendorID int `json:"vendor_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&forwardRequest); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		// Encontre a solicitação correspondente
+		requestsMux.Lock()
+		defer requestsMux.Unlock()
+
+		for i, req := range requests {
+			if req.ID == requestID {
+				requests[i].VendorID = forwardRequest.VendorID
+				fmt.Fprintf(w, "Request %d forwarded to vendor %d\n", requestID, forwardRequest.VendorID)
+
+				// Envie uma notificação por e-mail
+				go sendEmailNotification(requests[i])
+				return
+			}
+		}
+
+		http.Error(w, "Request not found", http.StatusNotFound)
+	})
+
+	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
+
+	server := &http.Server{
+		Addr:    ":8081",
+		Handler: r,
+	}
+
+	go func() {
+		<-shutdown
+		log.Println("Shutting down the server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Fatalf("Error shutting down server: %v", err)
+		}
+	}()
+
+	log.Println("Server started, press Ctrl+C to shutdown")
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Error starting server: %v", err)
+	}
+}
