@@ -46,7 +46,7 @@ var (
 func classifyRequest(message string) (string, string) {
 	var nature, gravity string
 
-	// Classificação da natureza da solicitação
+	
 	if strings.Contains(message, "erro") || strings.Contains(message, "falha") {
 		nature = "Técnica"
 	} else if strings.Contains(message, "reembolso") || strings.Contains(message, "pagamento") {
@@ -115,7 +115,6 @@ func deleteNature(id int) {
 }
 
 func sendEmailNotification(req Request) {
-	// Configurações de envio de e-mail (substitua com suas próprias configurações)
 	smtpHost := "smtp.example.com"
 	smtpPort := 587
 	smtpUsername := "your_username"
@@ -128,12 +127,8 @@ func sendEmailNotification(req Request) {
 		fmt.Sprintf("To: %s\r\n", recipientEmail) +
 		"Subject: Atualização de status da solicitação\r\n" +
 		"\r\n" +
-		fmt.Sprintf("A solicitação ID %d foi atualizada. Status: %s", req.ID, req.AdminComment))
-
-	// Autenticação de SMTP
+		fmt.Sprintf("A solicitação ID %d foi atualizada. Status: %s", req.ID, req.AdminComment))	
 	auth := smtp.PlainAuth("", smtpUsername, smtpPassword, smtpHost)
-
-	// Envie o e-mail usando SMTP
 	err := smtp.SendMail(smtpHost+":"+strconv.Itoa(smtpPort), auth, emailFrom, []string{recipientEmail}, message)
 	if err != nil {
 		log.Printf("Erro ao enviar e-mail de notificação: %v\n", err)
@@ -141,7 +136,7 @@ func sendEmailNotification(req Request) {
 }
 
 func handleFileUpload(r *http.Request) ([]string, error) {
-	r.ParseMultipartForm(10 << 20) // limite de tamanho de arquivo de 10 MB
+	r.ParseMultipartForm(10 << 20) 
 
 	files := r.MultipartForm.File["photos"]
 	var fileNames []string
@@ -173,14 +168,14 @@ func handleFileUpload(r *http.Request) ([]string, error) {
 func main() {
 	r := http.NewServeMux()
 
-	// Manipulador de solicitação para "/support/request"
+	
 	r.HandleFunc("/support/request", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		// Ler os dados do formulário, incluindo possíveis arquivos enviados
+		
 		if err := r.ParseMultipartForm(10 << 20); err != nil {
 			http.Error(w, "Failed to parse form", http.StatusBadRequest)
 			return
@@ -188,7 +183,7 @@ func main() {
 
 		message := r.FormValue("message")
 
-		// Lidar com o upload de arquivos (fotos)
+		
 		photos, err := handleFileUpload(r)
 		if err != nil {
 			http.Error(w, "Failed to upload photos", http.StatusInternalServerError)
@@ -199,14 +194,14 @@ func main() {
 		req.Message = message
 		req.Photos = photos
 
-		// Classificar a solicitação com base na mensagem
+		
 		req.Nature, req.Gravity = classifyRequest(req.Message)
 		saveRequest(req)
 
 		fmt.Fprintf(w, "Request ID %d registered\n", req.ID)
 	})
 
-	// Manipulador de solicitação para "/support/requests"
+	
 	r.HandleFunc("/support/requests", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -223,7 +218,7 @@ func main() {
 		}
 	})
 
-	// Manipulador de solicitação para "/support/natures"
+	
 	r.HandleFunc("/support/natures", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -247,7 +242,7 @@ func main() {
 		}
 	})
 
-	// Manipulador de solicitação para "/support/natures/{id}"
+	
 	r.HandleFunc("/support/natures/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -270,7 +265,6 @@ func main() {
 		fmt.Fprintf(w, "Nature with ID %d deleted\n", natureID)
 	})
 
-	// Manipulador de rota para responder a uma solicitação específica
 	r.HandleFunc("/support/request/{id}/respond", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -298,7 +292,7 @@ func main() {
 			return
 		}
 
-		// Encontre a solicitação correspondente
+		
 		requestsMux.Lock()
 		defer requestsMux.Unlock()
 
@@ -317,7 +311,6 @@ func main() {
 		http.Error(w, "Request not found", http.StatusNotFound)
 	})
 
-	// Manipulador de rota para encaminhar uma solicitação para um vendedor específico
 	r.HandleFunc("/support/request/{id}/forward", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -344,7 +337,7 @@ func main() {
 			return
 		}
 
-		// Encontre a solicitação correspondente
+	
 		requestsMux.Lock()
 		defer requestsMux.Unlock()
 
