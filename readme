@@ -1,18 +1,23 @@
-Suporte ao cliente
-Este microsserviço gerencia as interações dos usuários com o suporte ao cliente, permitindo que os usuários abram tickets de suporte, recebam respostas e acompanhem o status de suas solicitações.
+Funcionalidades Principais
+Gerenciamento de Solicitações:
 
-Solicitações (1 pontos)
-Registrar as solicitações de suporte dos clientes;
+POST /support/request: Registra novas solicitações com mensagem e anexos.
+GET /support/requests: Lista todas as solicitações registradas.
+Gerenciamento de Categorias de Natureza:
 
-Permitir envio de fotos (1 ponto)
-Classificar as solicitações com base em sua natureza e gravidade (1 ponto);
-Gerenciamento de naturezas (3 pontos)
-Permitir que os administradores cadastrem, alterem e excluem tipos de solicitações.
+POST /support/natures: Cria novas categorias de natureza.
+GET /support/natures: Lista todas as categorias existentes.
+DELETE /support/natures/{id}: Remove uma categoria de natureza pelo ID.
+Respostas Administrativas:
 
-Respostas (2 pontos)
-Permitir que os administradores do sistema respondam às solicitações e encaminhem para os vendedores caso seja necessário.
+POST /support/request/{id}/respond: Adiciona comentários administrativos a uma solicitação existente.
+Encaminhamento para Fornecedores:
 
-Notificações (4 pontos)
-Enviar emails aos usuários com atualizações de status das solicitações.
+POST /support/request/{id}/forward: Encaminha uma solicitação para um fornecedor especificado.
 
-Total: 12 pontos
+
+Funcionalidades Adicionais
+Classificação Automática: Categoriza solicitações com base em palavras-chave (técnica, financeira, geral e alta, normal).
+Armazenamento de Anexos: Suporta upload de fotos, armazenando-as localmente.
+Notificações por E-mail: Envia e-mails de notificação quando uma solicitação é atualizada.
+Encerramento Seguro: Encerra o servidor de forma segura ao receber sinais SIGINT ou SIGTERM.
