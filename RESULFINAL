@@ -122,7 +122,6 @@ func sendEmailNotification(req Request) {
 	emailFrom := "your_email@example.com"
 	recipientEmail := "recipient@example.com"
 
-	// Construa a mensagem de e-mail
 	message := []byte(fmt.Sprintf("From: %s\r\n", emailFrom) +
 		fmt.Sprintf("To: %s\r\n", recipientEmail) +
 		"Subject: Atualização de status da solicitação\r\n" +
